@@ -14,6 +14,59 @@ A practical reference for creating and using Claude Code customizations.
 
 ---
 
+## CLAUDE.md (Memory Files)
+
+CLAUDE.md files provide persistent project context that Claude loads automatically every session.
+
+### Location
+
+```
+./CLAUDE.md
+```
+
+Commit to git to share with your team.
+
+### What to Include
+
+```markdown
+# Project Name
+
+## Stack
+- Framework: Next.js 14 with App Router
+- Database: PostgreSQL with Prisma
+- Auth: NextAuth.js
+
+## Commands
+- `npm run dev` - Start development server
+- `npm test` - Run tests
+- `npm run lint` - Check code style
+
+## Code Style
+- Use TypeScript strict mode
+- Prefer named exports
+- Use `async/await` over `.then()`
+
+## Testing
+- Tests live in `__tests__/` next to source files
+- Use `vitest` for unit tests
+- Run `npm test -- --watch` during development
+```
+
+### Best Practices
+
+| Do | Don't |
+|----|-------|
+| Keep it concise (<500 lines) | Embed entire style guides |
+| Include build/test commands | Duplicate linter rules |
+| Document project structure | Add temporary notes |
+| Update when patterns change | Include secrets/credentials |
+
+**Tips:**
+- Press `#` during a session to have Claude add learnings
+- Iterate like you would a prompt - refine based on results
+
+---
+
 ## Skills
 
 Skills are reusable instruction sets that Claude can invoke with `/skill-name`.
