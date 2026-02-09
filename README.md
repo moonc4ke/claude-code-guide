@@ -6,8 +6,7 @@ A practical reference for creating and using Claude Code customizations.
 
 | Type | Location | Invokable | Purpose |
 |------|----------|-----------|---------|
-| **Skills** | `.claude/skills/<name>/SKILL.md` | Yes (`/name`) | Reusable instructions/workflows |
-| ↳ *Design Rules* | `.claude/skills/frontend-design/` | Yes | UI/UX guidelines (not CLAUDE.md) |
+| **Skills** | `.claude/skills/<name>/SKILL.md` | Yes (`/name`) | Discrete workflows (deploy, review) |
 | **Agents** | `.claude/agents/<name>.md` | Yes (via Task tool) | Isolated workers with own context |
 | **Features** | `.claude/features/<name>.md` | No | Project documentation for Claude |
 | **MCP** | `.mcp.json` or `~/.claude.json` | Auto | External tool/database integrations |
@@ -65,11 +64,59 @@ Commit to git to share with your team.
 - Press `#` during a session to have Claude add learnings
 - Iterate like you would a prompt - refine based on results
 
+### Docs Index Pattern (Recommended)
+
+[Vercel's research](https://vercel.com/blog/agents-md-outperforms-skills-in-our-agent-evals) found that a compressed documentation index in the memory file achieved 100% pass rate vs 53% for skills.
+
+**Why this works:**
+- No decision overhead - agent always has context
+- Consistent availability every turn
+- Avoids instruction sequencing issues
+
+**Example: Compressed API Index**
+```markdown
+## API Reference
+| Function | Location | Purpose |
+|----------|----------|---------|
+| createUser() | src/api/users.ts:23 | Create user record |
+| validateJWT() | src/auth/jwt.ts:45 | Validate token |
+| processPayment() | src/billing/stripe.ts:89 | Charge customer |
+
+## Key Components
+| Component | Path | Props |
+|-----------|------|-------|
+| Button | src/ui/Button.tsx | variant, size, disabled |
+| Modal | src/ui/Modal.tsx | open, onClose, title |
+```
+
+**Guidelines:**
+- Target <8KB total for docs index
+- Use tables, not prose
+- Include file:line references for navigation
+- Link to details rather than embedding full content
+
 ---
 
 ## Skills
 
 Skills are reusable instruction sets that Claude can invoke with `/skill-name`.
+
+### When to Use Skills vs CLAUDE.md
+
+Based on [Vercel's agent evaluations](https://vercel.com/blog/agents-md-outperforms-skills-in-our-agent-evals):
+
+| Content Type | Best Location | Why |
+|--------------|---------------|-----|
+| API/framework reference | CLAUDE.md | 100% vs 53% pass rate with passive context |
+| Design tokens & system | CLAUDE.md | Frequently needed, no invoke overhead |
+| Build/test commands | CLAUDE.md | Universal, small footprint |
+| **Code review workflow** | **Skill** | User-triggered, discrete task |
+| **Deploy/release process** | **Skill** | Multi-step, needs explicit invocation |
+| **Migration guides** | **Skill** | Version-specific, occasional use |
+
+**Rule of thumb:**
+- Reference material → CLAUDE.md (compressed)
+- Discrete workflows → Skills
 
 ### Location
 ```
@@ -124,83 +171,35 @@ Use the project's coding standards from CONTRIBUTING.md.
 /review src/auth/
 ```
 
-### Example: Frontend Design Skill (Recommended for UI/UX Rules)
+### Example: Design System in CLAUDE.md
 
-Per [Anthropic's official guidance](https://www.anthropic.com/engineering/claude-code-design-skills), **use Skills for design system rules**, not CLAUDE.md.
-
-**Why Skills over CLAUDE.md?**
-
-| Aspect | CLAUDE.md | Skills |
-|--------|-----------|--------|
-| Loading | Always, every session | On-demand when relevant |
-| Context cost | Permanent overhead | Zero when not building UI |
-| Best for | Build commands, universal code style | Domain-specific: design, APIs |
-
-> "Embedding all design guidance in CLAUDE.md creates permanent context overhead: every request—debugging Python, analyzing data—carries frontend design context."
-> — Anthropic Engineering Blog
-
-**Complete Example:**
+Based on Vercel's findings, put design system reference in CLAUDE.md rather than a Skill:
 
 ```markdown
-<!-- .claude/skills/frontend-design/SKILL.md -->
----
-name: Frontend Design
-description: Generate production-grade UI following our design system
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Glob
-context:
-  include:
-    - src/styles/tokens.css
-    - tailwind.config.*
----
+## Design System
 
-# Frontend Design Guidelines
+### Tokens (from src/styles/tokens.css)
+| Token | Value | Usage |
+|-------|-------|-------|
+| --color-primary | #2563eb | Buttons, links |
+| --color-error | #dc2626 | Error states |
+| --spacing-unit | 4px | Base grid unit |
 
-## Design Tokens
-- Colors: use `var(--color-*)` from tokens.css
-- Never hardcode hex values
-- Spacing: 4px grid (Tailwind: 1 = 4px)
+### Typography
+| Style | Font | Weight | Size |
+|-------|------|--------|------|
+| heading | Plus Jakarta Sans | 600 | 1.5-3rem |
+| body | Inter | 400 | 1rem |
 
-## Typography
-- Headings: "Plus Jakarta Sans", weight 600-700
-- Body: "Inter", weight 400-500
-- Use rem units, base 16px
-
-## Components
-- Location: `src/components/ui/`
-- All components accept `className` prop
-- Use Tailwind utility classes
-- Corners: `rounded-lg` (8px)
-
-## Anti-Patterns (NEVER use)
-- Generic purple-blue gradients
-- Inter/Roboto without justification
-- Card grids without visual hierarchy
-- Uniform spacing everywhere
-- Animations without purpose
-
-## Quality Checklist
-- [ ] Uses design tokens, not hardcoded values
-- [ ] Responsive (mobile-first)
-- [ ] Dark mode compatible
-- [ ] Consistent with existing components
+### Components (src/components/ui/)
+| Component | Key Props |
+|-----------|-----------|
+| Button | variant: primary/secondary, size: sm/md/lg |
+| Input | type, error, helperText |
+| Card | padding: sm/md/lg, shadow: boolean |
 ```
 
-**Invocation:**
-- Automatic: Claude loads when building UI
-- Manual: `/frontend-design` or ask "follow our design system"
-
-**Visual Verification:**
-Anthropic recommends screenshot-based iteration:
-1. Paste a visual mock
-2. Ask Claude to implement
-3. Take screenshot of result
-4. Iterate until it matches
-
-Use the [Claude in Chrome extension](https://chromewebstore.google.com/detail/claude/danfoamhhdadlphclagjfenccijhbpan) for automatic screenshots.
+This compressed format loads every session without invoke overhead.
 
 ---
 
@@ -339,20 +338,25 @@ stripe listen --forward-to localhost:3000/webhooks/stripe
 
 ## Key Differences Summary
 
-| Aspect | Skills | Agents | Features |
-|--------|--------|--------|----------|
-| **What** | Instructions/workflows | Isolated workers | Documentation |
-| **Invocation** | `/skill-name` | Task tool (automatic) | Not invokable |
-| **Context** | Loaded on invoke | Fresh context per spawn | Reference material |
-| **Tools** | Configurable | Configurable | N/A |
-| **Use case** | Repeatable tasks | Parallel/specialized work | System knowledge |
+| Aspect | CLAUDE.md | Skills | Agents | Features |
+|--------|-----------|--------|--------|----------|
+| **Best for** | Reference material, docs index | Discrete workflows | Parallel/specialized work | System knowledge |
+| **Pass rate** | 100% (Vercel evals) | 53-79% (Vercel evals) | N/A | N/A |
+| **Invocation** | Automatic | `/skill-name` | Task tool (automatic) | Not invokable |
+| **Context** | Always loaded | Loaded on invoke | Fresh per spawn | Reference material |
 
 ### When to Use Each
 
+**Use CLAUDE.md when:**
+- API/framework reference docs
+- Design tokens and system rules
+- Build/test commands
+- Any frequently-needed context
+
 **Use Skills when:**
-- You have a repeatable workflow (review, deploy, test)
-- You want consistent instructions across invocations
-- You need to limit available tools for a task
+- User-triggered discrete workflows (review, deploy)
+- Multi-step processes needing explicit invocation
+- Version-specific migrations or occasional tasks
 
 **Use Agents when:**
 - Work can be parallelized
