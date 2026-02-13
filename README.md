@@ -1,6 +1,6 @@
 # Claude Code: Complete Guide
 
-A practical reference for Claude Code customizations, configuration, and features (current as of v2.1.37).
+A practical reference for Claude Code customizations, configuration, and features (current as of v2.1.41).
 
 ## Quick Reference
 
@@ -819,6 +819,8 @@ OS-level sandboxing for bash commands to restrict file and network access.
 
 ### Configuration
 
+**Note:** Writes to `.claude/skills` are blocked in sandbox mode for security.
+
 ```json
 {
   "sandbox": {
@@ -1088,7 +1090,7 @@ AGPL-3.0 (free for open-source). Commercial licensing available for closed-sourc
 | `/stats` | Usage statistics (with date filtering via `r` key) |
 | `/context` | Token count display |
 | `/plan` | Enter plan mode |
-| `/rename` | Rename current session |
+| `/rename` | Rename current session (auto-generates name from context if no argument) |
 | `/tag` | Tag current session |
 | `/teleport` | Connect to claude.ai |
 | `/remote-env` | Remote environment config |
@@ -1105,6 +1107,14 @@ AGPL-3.0 (free for open-source). Commercial licensing available for closed-sourc
 | **Shift+Up/Down** | Navigate agent team teammates |
 | **Tab** | Autocomplete (bash history, files) |
 | `/keybindings` | Customize all shortcuts |
+
+### Auth Subcommands
+
+```bash
+claude auth login          # Log in to Claude
+claude auth status         # Check current authentication status
+claude auth logout         # Log out
+```
 
 ### CLI Flags
 
@@ -1227,6 +1237,9 @@ AGPL-3.0 (free for open-source). Commercial licensing available for closed-sourc
 
 | Version | Feature |
 |---------|---------|
+| v2.1.41 | **`claude auth` subcommands** (login/status/logout), Windows ARM64, `/rename` auto-generates names |
+| v2.1.39 | Guard against nested Claude Code sessions, OTel `speed` attribute for fast mode |
+| v2.1.38 | Security: blocked `.claude/skills` writes in sandbox, improved heredoc parsing |
 | v2.1.37 | `/fast` + `/extra-usage` compatibility fix |
 | v2.1.36 | **Fast mode** for Opus 4.6 |
 | v2.1.33 | **Agent memory** (persistent cross-session), `TeammateIdle`/`TaskCompleted` hooks |
