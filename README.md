@@ -1,6 +1,6 @@
 # Claude Code: Complete Guide
 
-A practical reference for Claude Code customizations, configuration, and features (current as of v2.1.41).
+A practical reference for Claude Code customizations, configuration, and features (current as of v2.1.56).
 
 ## Quick Reference
 
@@ -10,6 +10,7 @@ A practical reference for Claude Code customizations, configuration, and feature
 | **Agents** | `.claude/agents/<name>.md` | Yes (via Task tool) | Isolated workers with own context |
 | **Features** | `.claude/features/<name>.md` | No | Project documentation for Claude |
 | **Hooks** | Settings or frontmatter | Auto | Lifecycle automation & quality gates |
+| **Rules** | `.claude/rules/<name>.md` | No | Path-specific modular project instructions |
 | **Plugins** | `.claude-plugin/plugin.json` | Mixed | Distributable skill/agent/hook packages |
 | **MCP** | `.mcp.json` or `~/.claude.json` | Auto | External tool/database integrations |
 
@@ -26,6 +27,9 @@ CLAUDE.md files provide persistent project context that Claude loads automatical
 | `./CLAUDE.md` | Project root | Commit to git to share with team |
 | `~/.claude/CLAUDE.md` | User-global | Personal preferences across all projects |
 | `--add-dir` directories | Additional | Requires `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` |
+| `/Library/Application Support/ClaudeCode/CLAUDE.md` | Managed (macOS) | Organization policy |
+| `/etc/claude-code/CLAUDE.md` | Managed (Linux) | Organization policy |
+| `C:\Program Files\ClaudeCode\CLAUDE.md` | Managed (Windows) | Organization policy |
 
 ### What to Include
 
@@ -73,6 +77,21 @@ Claude automatically records and recalls memories as it works. Memories persist 
 - Disable with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`
 - First 200 lines of `MEMORY.md` are injected into the system prompt
 
+### CLAUDE.md Imports
+
+CLAUDE.md files can import other files using the `@` syntax:
+
+```markdown
+@path/to/file.md
+@docs/api-reference.md
+@shared/coding-standards.md
+```
+
+- Imports are resolved relative to the CLAUDE.md file's directory
+- Recursive imports supported (max depth 5)
+- First use triggers an approval dialog
+- Imports inside code spans (`` `@path` ``) or code blocks are not evaluated
+
 ### Docs Index Pattern (Recommended)
 
 [Vercel's research](https://vercel.com/blog/agents-md-outperforms-skills-in-our-agent-evals) found that a compressed documentation index in the memory file achieved 100% pass rate vs 53% for skills.
@@ -103,6 +122,43 @@ Claude automatically records and recalls memories as it works. Memories persist 
 - Use tables, not prose
 - Include file:line references for navigation
 - Link to details rather than embedding full content
+
+---
+
+## Rules
+
+Rules provide modular, path-specific project instructions via `.claude/rules/` files.
+
+### Location
+
+```
+.claude/rules/<name>.md           # Project rules (commit to git)
+~/.claude/rules/<name>.md         # User-level global rules
+```
+
+### Path-Specific Rules
+
+Use YAML frontmatter with glob patterns to scope rules to specific paths:
+
+```markdown
+<!-- .claude/rules/frontend.md -->
+---
+paths:
+  - "src/components/**"
+  - "src/pages/**"
+---
+
+Use React functional components with TypeScript.
+Always use the project's design tokens from `src/styles/tokens.css`.
+```
+
+### Features
+
+- **Glob patterns** in `paths` field with brace expansion (e.g., `src/{components,pages}/**`)
+- **Subdirectory organization** — rules can be nested in subdirectories
+- **Symlink support** — symlinked rule files are followed
+- Rules without `paths` frontmatter apply globally
+- User-level rules at `~/.claude/rules/` apply across all projects
 
 ---
 
@@ -259,6 +315,8 @@ Agents can also be defined inline via `--agents` CLI flag (JSON), managed with `
 | `mcpServers` | string[] | MCP servers available to the agent |
 | `hooks` | object | Lifecycle hooks scoped to this agent |
 | `memory` | object | Persistent cross-session memory |
+| `background` | boolean | Always run as background task |
+| `isolation` | string | `"worktree"` for isolated git worktree |
 
 ### Agent Memory
 
@@ -313,6 +371,25 @@ Return a summary with:
 - Pass/fail count
 - For each failure: file, test name, error, suggested fix
 ```
+
+### Worktree Isolation
+
+Agents can run in isolated git worktrees so their changes don't affect the main working tree:
+
+```yaml
+# In agent frontmatter
+isolation: worktree
+```
+
+```bash
+# CLI flag to start session in isolated worktree
+claude --worktree
+claude -w
+```
+
+- Also available via `isolation: "worktree"` in the Task tool
+- `WorktreeCreate` and `WorktreeRemove` hooks fire for custom VCS integration
+- Worktree is auto-cleaned if no changes are made; otherwise path and branch are returned
 
 ### Spawning Agents
 
@@ -428,6 +505,9 @@ Hooks are user-defined automations that run at specific lifecycle points. They c
 | `TaskCompleted` | Task marked complete | Quality gates |
 | `PreCompact` | Before context compaction | Save important context |
 | `Setup` | `--init`/`--maintenance` run | Project bootstrapping |
+| `ConfigChange` | Config file changes during session | React to settings updates |
+| `WorktreeCreate` | Worktree created (`--worktree` or `isolation: "worktree"`) | Custom VCS setup |
+| `WorktreeRemove` | Worktree cleanup | Custom VCS teardown |
 
 ### Hook Types
 
@@ -489,6 +569,10 @@ Hooks can be defined in multiple locations:
 - **`additionalContext`** - Inject context into the conversation
 - **`async: true`** - Run hooks in the background
 - **Matchers** - Regex patterns (e.g., `Bash`, `Edit|Write`, `mcp__memory__.*`)
+- **`once`** - Run hook only once per session (useful for skills)
+- **`statusMessage`** - Custom spinner message while hook runs
+
+> **Deprecation:** Top-level `decision`/`reason` fields in PreToolUse hooks are deprecated. Use `hookSpecificOutput.permissionDecision` instead.
 
 ### Managing Hooks
 
@@ -547,6 +631,14 @@ Plugin skills are namespaced to avoid conflicts:
 /my-plugin:review       # Invoke plugin's review skill
 ```
 
+### Plugin Settings
+
+Plugins can ship default configuration via `settings.json` in the plugin root.
+
+### LSP Servers
+
+Plugins can include LSP (Language Server Protocol) servers via `.lsp.json` for language intelligence features.
+
 ### Managing Plugins
 
 - VSCode has native plugin management support
@@ -554,6 +646,9 @@ Plugin skills are namespaced to avoid conflicts:
 - Pin plugins to specific git commit SHAs for reproducibility
 - Install counts displayed for marketplace plugins
 - Trust warnings shown for new plugins
+- Custom npm registries supported for private plugin distribution
+- Version pinning for reproducible plugin installations
+- `CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS` env var to configure git timeout for plugin fetches
 
 ---
 
@@ -727,7 +822,7 @@ Faster output from the same Opus 4.6 model at higher token cost.
 
 | Scope | Location | Purpose |
 |-------|----------|---------|
-| Managed | `/etc/claude-code/` (Linux), `/Library/Application Support/ClaudeCode/` (macOS) | Organization policy |
+| Managed | `/etc/claude-code/` (Linux), `/Library/Application Support/ClaudeCode/` (macOS), `C:\Program Files\ClaudeCode\` (Windows) | Organization policy (also supports macOS plist and Windows Registry) |
 | CLI args | Command line flags | Session override |
 | Local | `.claude/settings.local.json` | Personal project settings (gitignored) |
 | Project | `.claude/settings.json` | Shared team settings |
@@ -752,6 +847,12 @@ Faster output from the same Opus 4.6 model at higher token cost.
 | `temperatureOverride` | number | Override temperature |
 | `fileSuggestion` | string | Custom file suggestion command |
 | `attribution` | object | Customize commit/PR attribution |
+| `spinnerTipsEnabled` | boolean | Show tips in spinner |
+| `spinnerTipsOverride` | string[] | Custom spinner tip messages |
+| `respectGitignore` | boolean | Respect .gitignore (default: true) |
+| `disableAllHooks` | boolean | Disable all hooks globally |
+| `availableModels` | string[] | Restrict model selection |
+| `env` | object | Environment variables for sessions |
 
 ### Managing Settings
 
@@ -833,8 +934,11 @@ OS-level sandboxing for bash commands to restrict file and network access.
       "httpProxyPort": 8080,
       "socksProxyPort": 1080,
       "allowUnixSockets": ["/var/run/docker.sock"],
-      "allowAllUnixSockets": false
-    }
+      "allowAllUnixSockets": false,
+      "allowManagedDomainsOnly": false
+    },
+    "allowUnsandboxedCommands": [],
+    "enableWeakerNestedSandbox": false
   }
 }
 ```
@@ -1067,6 +1171,27 @@ AGPL-3.0 (free for open-source). Commercial licensing available for closed-sourc
 
 ---
 
+## Remote Control
+
+Continue your local Claude Code session from a phone, tablet, or browser.
+
+### Usage
+
+```bash
+# CLI command
+claude remote-control
+
+# In-session command
+/remote-control
+/rc
+```
+
+- Generates a QR code / link to connect from another device
+- Available on Pro and Max plans
+- Session stays local — remote device sends input and displays output
+
+---
+
 ## CLI Commands & Flags
 
 ### In-Session Commands
@@ -1094,6 +1219,15 @@ AGPL-3.0 (free for open-source). Commercial licensing available for closed-sourc
 | `/tag` | Tag current session |
 | `/teleport` | Connect to claude.ai |
 | `/remote-env` | Remote environment config |
+| `/remote-control` or `/rc` | Remote Control session |
+| `/mobile` | Mobile app download QR code |
+| `/chrome` | Toggle Chrome integration |
+| `/desktop` | Hand off to Desktop app |
+| `/status` | Verify active settings sources |
+| `/memory` | Open memory file selector |
+| `/init` | Bootstrap CLAUDE.md for codebase |
+| `/plugin` | Plugin management |
+| `/login` | Sign in through claude.ai |
 
 ### Keyboard Shortcuts
 
@@ -1104,6 +1238,7 @@ AGPL-3.0 (free for open-source). Commercial licensing available for closed-sourc
 | **Ctrl+G** | Open external editor |
 | **Esc+Esc** | Open rewind/checkpoint selector |
 | **Shift+Tab** | Cycle permission modes |
+| **Ctrl+F** | Kill background agents (two-press confirm) |
 | **Shift+Up/Down** | Navigate agent team teammates |
 | **Tab** | Autocomplete (bash history, files) |
 | `/keybindings` | Customize all shortcuts |
@@ -1130,6 +1265,10 @@ claude auth logout         # Log out
 | `--init-only` | Run Setup hooks and exit |
 | `--maintenance` | Run maintenance Setup hooks |
 | `--tools <list>` | Restrict available tools |
+| `--worktree` (`-w`) | Create isolated worktree |
+| `--chrome` | Launch with Chrome integration |
+| `--sandbox` / `--no-sandbox` | Enable/disable sandboxing |
+| `--verbose` | Detailed connection logs |
 
 ---
 
@@ -1146,6 +1285,9 @@ claude auth logout         # Log out
 | `CLAUDE_CODE_TASK_LIST_ID` | Share task list across sessions |
 | `CLAUDE_CODE_TMPDIR` | Override temp directory |
 | `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD` | Load CLAUDE.md from `--add-dir` dirs (`1`) |
+| `CLAUDE_CODE_DISABLE_1M_CONTEXT` | Disable 1M context window (`1`) |
+| `CLAUDE_CODE_SIMPLE` | Simplified output mode (`1`) |
+| `CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS` | Git timeout for plugin fetches (ms) |
 
 ### Model & Output
 
@@ -1156,6 +1298,9 @@ claude auth logout         # Log out
 | `CLAUDE_CODE_EFFORT_LEVEL` | Effort level: `low` / `medium` / `high` |
 | `MAX_THINKING_TOKENS` | Extended thinking token budget |
 | `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | Subagent auto-compaction threshold |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | Override default Haiku model |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Override default Sonnet model |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Override default Opus model |
 
 ### Bash & Shell
 
@@ -1165,6 +1310,8 @@ claude auth logout         # Log out
 | `BASH_MAX_OUTPUT_LENGTH` | Max bash output characters |
 | `CLAUDE_CODE_SHELL` | Override shell detection |
 | `CLAUDE_CODE_SHELL_PREFIX` | Command prefix for all bash |
+| `BASH_MAX_TIMEOUT_MS` | Maximum bash command timeout |
+| `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` | Keep bash CWD at project root |
 
 ### MCP & Network
 
@@ -1179,6 +1326,22 @@ claude auth logout         # Log out
 | `CLAUDE_CODE_CLIENT_CERT` | mTLS client certificate |
 | `CLAUDE_CODE_CLIENT_CERT_KEY` | mTLS client key |
 | `CLAUDE_CODE_CLIENT_CERT_KEY_PASSPHRASE` | mTLS key passphrase |
+
+### Auth & Identity
+
+| Variable | Description |
+|----------|-------------|
+| `CLAUDE_CODE_ACCOUNT_UUID` | Account UUID override |
+| `CLAUDE_CODE_USER_EMAIL` | User email override |
+| `CLAUDE_CODE_ORGANIZATION_UUID` | Organization UUID |
+
+### Provider
+
+| Variable | Description |
+|----------|-------------|
+| `CLAUDE_CODE_USE_BEDROCK` | Use AWS Bedrock (`1`) |
+| `CLAUDE_CODE_USE_VERTEX` | Use Google Vertex AI (`1`) |
+| `CLAUDE_CODE_USE_FOUNDRY` | Use Azure Foundry (`1`) |
 
 ### Teams & Agents
 
@@ -1227,16 +1390,41 @@ claude auth logout         # Log out
 
 | Platform | URL |
 |----------|-----|
-| **Desktop** | https://code.claude.com/docs/en/desktop |
-| **Chrome Extension** | https://code.claude.com/docs/en/chrome |
+| **Desktop (macOS, Windows)** | https://code.claude.com/docs/en/desktop |
+| **Chrome Extension** (`--chrome` flag) | https://code.claude.com/docs/en/chrome |
 | **Slack Integration** | https://code.claude.com/docs/en/slack |
 | **Claude Code on the Web** | https://code.claude.com/docs/en/claude-code-on-the-web |
 | **Dev Containers** | https://code.claude.com/docs/en/devcontainer |
+
+#### Installation Methods
+
+```bash
+# npm (primary)
+npm install -g @anthropic-ai/claude-code
+
+# Homebrew (macOS/Linux)
+brew install claude-code
+
+# WinGet (Windows)
+winget install Anthropic.ClaudeCode
+
+# Curl script
+curl -fsSL https://claude.ai/install.sh | sh
+```
 
 ### Recent Features (v2.1.x)
 
 | Version | Feature |
 |---------|---------|
+| v2.1.56 | VS Code extension fix |
+| v2.1.53 | UI fixes, Windows stability improvements |
+| v2.1.51 | **`claude remote-control`**, managed settings via macOS plist / Windows Registry, npm plugin registries |
+| v2.1.50 | **`WorktreeCreate`/`WorktreeRemove` hooks**, `isolation: worktree` in agents, `claude agents` CLI, 1M context for fast mode |
+| v2.1.49 | **`--worktree` flag**, **Ctrl+F** kill agents, `background: true` agents, `ConfigChange` hook, plugin `settings.json` |
+| v2.1.47 | Major bugfix release (70+ items), `chat:newline` keybinding |
+| v2.1.46 | claude.ai MCP connectors in Claude Code |
+| v2.1.45 | Claude Sonnet 4.6, `spinnerTipsOverride` |
+| v2.1.42 | Startup performance, Opus 4.6 effort callout |
 | v2.1.41 | **`claude auth` subcommands** (login/status/logout), Windows ARM64, `/rename` auto-generates names |
 | v2.1.39 | Guard against nested Claude Code sessions, OTel `speed` attribute for fast mode |
 | v2.1.38 | Security: blocked `.claude/skills` writes in sandbox, improved heredoc parsing |
