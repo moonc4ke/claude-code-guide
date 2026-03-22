@@ -1,6 +1,6 @@
 # Claude Code: Complete Guide
 
-A practical reference for Claude Code customizations, configuration, and features (current as of v2.1.56).
+A practical reference for Claude Code customizations, configuration, and features (current as of v2.1.81).
 
 ## Quick Reference
 
@@ -76,6 +76,7 @@ Claude automatically records and recalls memories as it works. Memories persist 
 
 - Disable with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`
 - First 200 lines of `MEMORY.md` are injected into the system prompt
+- Custom storage location via `autoMemoryDirectory` setting
 
 ### CLAUDE.md Imports
 
@@ -200,6 +201,7 @@ Skills are auto-discovered from nested `.claude/skills/` directories and from `-
 | `allowed-tools` | string[] | Tools the skill can use |
 | `context` | object | Files/URLs to include as context |
 | `context: fork` | | Run skill in a subagent context |
+| `effort` | string | Model effort level (`low`, `medium`, `high`) |
 
 ### Arguments
 
@@ -390,6 +392,8 @@ claude -w
 - Also available via `isolation: "worktree"` in the Task tool
 - `WorktreeCreate` and `WorktreeRemove` hooks fire for custom VCS integration
 - Worktree is auto-cleaned if no changes are made; otherwise path and branch are returned
+- `worktree.sparsePaths` setting for git sparse-checkout in large monorepos
+- Project configs and auto memory are shared across git worktrees
 
 ### Spawning Agents
 
@@ -501,11 +505,15 @@ Hooks are user-defined automations that run at specific lifecycle points. They c
 | `SubagentStart` | Subagent spawns | Resource tracking |
 | `SubagentStop` | Subagent finishes | Result validation |
 | `Stop` | Claude stops generating | Quality checks |
+| `StopFailure` | Turn ends due to API error | Error handling, alerts |
 | `TeammateIdle` | Agent team member idle | Task reassignment |
 | `TaskCompleted` | Task marked complete | Quality gates |
 | `PreCompact` | Before context compaction | Save important context |
+| `PostCompact` | After compaction completes | Post-compaction actions |
 | `Setup` | `--init`/`--maintenance` run | Project bootstrapping |
 | `ConfigChange` | Config file changes during session | React to settings updates |
+| `Elicitation` | MCP elicitation request received | Intercept/modify elicitation |
+| `ElicitationResult` | MCP elicitation response | Override elicitation responses |
 | `WorktreeCreate` | Worktree created (`--worktree` or `isolation: "worktree"`) | Custom VCS setup |
 | `WorktreeRemove` | Worktree cleanup | Custom VCS teardown |
 
@@ -514,6 +522,7 @@ Hooks are user-defined automations that run at specific lifecycle points. They c
 | Type | Description | Use Case |
 |------|-------------|----------|
 | `command` | Shell script execution | File ops, API calls, linting |
+| `http` | POST JSON to URL, receive JSON response | Webhooks, external services |
 | `prompt` | Single LLM call | Content review, classification |
 | `agent` | Multi-turn subagent | Complex validation, code review |
 
@@ -562,6 +571,23 @@ Hooks can be defined in multiple locations:
 }
 ```
 
+### Example: HTTP Hook (Webhook)
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "type": "http",
+        "url": "https://hooks.example.com/claude-code",
+        "timeout": 5000
+      }
+    ]
+  }
+}
+```
+
 ### Hook Capabilities
 
 - **`permissionDecision`** - Return `allow`, `deny`, or `ask` from PreToolUse hooks
@@ -571,6 +597,7 @@ Hooks can be defined in multiple locations:
 - **Matchers** - Regex patterns (e.g., `Bash`, `Edit|Write`, `mcp__memory__.*`)
 - **`once`** - Run hook only once per session (useful for skills)
 - **`statusMessage`** - Custom spinner message while hook runs
+- **`deny`** - Remove tools before sending to model (e.g., `deny: ["mcp__servername"]`)
 
 > **Deprecation:** Top-level `decision`/`reason` fields in PreToolUse hooks are deprecated. Use `hookSpecificOutput.permissionDecision` instead.
 
@@ -630,6 +657,26 @@ Plugin skills are namespaced to avoid conflicts:
 /my-plugin:deploy       # Invoke plugin's deploy skill
 /my-plugin:review       # Invoke plugin's review skill
 ```
+
+### Inline Plugins (Settings-Declared)
+
+Plugins can be declared directly in `settings.json` without a separate repository:
+
+```json
+{
+  "enabledPlugins": [
+    {
+      "source": "settings",
+      "name": "my-inline-plugin",
+      "skills": [{ "name": "greet", "body": "Say hello to $ARGUMENTS" }]
+    }
+  ]
+}
+```
+
+### Plugin Persistent State
+
+Plugins can store persistent data that survives updates using the `${CLAUDE_PLUGIN_DATA}` variable in hooks and commands. Ref-tracked plugins re-clone on every load for freshness.
 
 ### Plugin Settings
 
@@ -813,6 +860,9 @@ Faster output from the same Opus 4.6 model at higher token cost.
 - Persists across sessions
 - Visual indicator: lightning bolt icon next to prompt
 - `fastMode` setting in `settings.json`
+- 1M context window supported in fast mode
+- Opus 4.6 defaults to medium effort for Max and Team subscribers
+- "ultrathink" keyword available for maximum effort via `/effort`
 
 ---
 
@@ -853,6 +903,11 @@ Faster output from the same Opus 4.6 model at higher token cost.
 | `disableAllHooks` | boolean | Disable all hooks globally |
 | `availableModels` | string[] | Restrict model selection |
 | `env` | object | Environment variables for sessions |
+| `autoMemoryDirectory` | string | Custom auto-memory storage location |
+| `modelOverrides` | object | Map model picker entries to custom provider IDs |
+| `voiceEnabled` | boolean | Enable voice mode on startup |
+| `feedbackSurveyRate` | number | Enterprise feedback survey sample rate |
+| `channels` | boolean | Enable MCP channel servers (research preview) |
 
 ### Managing Settings
 
@@ -938,7 +993,23 @@ OS-level sandboxing for bash commands to restrict file and network access.
       "allowManagedDomainsOnly": false
     },
     "allowUnsandboxedCommands": [],
-    "enableWeakerNestedSandbox": false
+    "enableWeakerNestedSandbox": false,
+    "enableWeakerNetworkIsolation": false,
+    "allowRead": ["/path/to/allow"],
+    "denyRead": ["/path/to/deny"]
+  }
+}
+```
+
+- **`allowRead`** - Re-allow read access within `denyRead` regions (fine-grained control)
+- **`enableWeakerNetworkIsolation`** - macOS only, for TLS certificate verification scenarios
+
+```json
+// Example: deny all of /secrets but allow /secrets/public
+{
+  "sandbox": {
+    "denyRead": ["/secrets"],
+    "allowRead": ["/secrets/public"]
   }
 }
 ```
@@ -1085,7 +1156,26 @@ Reference MCP resources with `@` mentions:
 > Review @postgres:schema://users
 ```
 
-### Authentication
+### MCP Elicitation
+
+MCP servers can request structured input from the user via interactive dialogs. This enables servers to ask for credentials, configuration, or confirmations at runtime.
+
+- Hook into elicitation with `Elicitation` / `ElicitationResult` hook events
+- Servers must declare elicitation capabilities
+
+### MCP Channels (Research Preview)
+
+Channel servers can push messages into active sessions and relay tool approval prompts to other devices (e.g., your phone).
+
+```bash
+# Enable channel servers
+claude --channels
+
+# Or set in settings
+{ "channels": true }
+```
+
+### MCP OAuth
 
 Many servers require OAuth. Use `/mcp` in Claude Code to authenticate:
 
@@ -1093,6 +1183,10 @@ Many servers require OAuth. Use `/mcp` in Claude Code to authenticate:
 > /mcp
 # Select server → Authenticate → Follow browser flow
 ```
+
+- Supports Client ID Metadata Document (CIMD / SEP-991)
+- Pre-configured OAuth credentials for servers without Dynamic Client Registration
+- Manual URL paste fallback when automatic redirect fails
 
 ---
 
@@ -1171,6 +1265,43 @@ AGPL-3.0 (free for open-source). Commercial licensing available for closed-sourc
 
 ---
 
+## Voice Mode
+
+Speak to Claude Code instead of typing. Push-to-talk activated with the Space key.
+
+### Supported Languages (20 total)
+
+English, Spanish, French, German, Italian, Portuguese, Chinese, Japanese, Korean, Hindi, Russian, Polish, Turkish, Dutch, Ukrainian, Greek, Czech, Danish, Swedish, Norwegian.
+
+### Configuration
+
+| Setting | Description |
+|---------|-------------|
+| `voiceEnabled: true` | Enable voice mode on startup |
+| `voice:pushToTalk` keybinding | Rebind push-to-talk key (default: Space) |
+
+---
+
+## Scheduled Tasks (Cron)
+
+Schedule recurring tasks with frequency options using the built-in cron system.
+
+### Usage
+
+```bash
+/loop 5m /foo          # Run /foo every 5 minutes
+/loop 10m "check deploy status"  # Run prompt every 10 minutes (default)
+```
+
+### Management
+
+- Cron tasks can be created, listed, and deleted via CronCreate/CronList/CronDelete tools
+- Disable with `CLAUDE_CODE_DISABLE_CRON=1` env var
+- Missed runs are handled automatically
+- Desktop app supports scheduling with frequency options and missed run handling
+
+---
+
 ## Remote Control
 
 Continue your local Claude Code session from a phone, tablet, or browser.
@@ -1213,7 +1344,7 @@ claude remote-control
 | `/keybindings` | Customize keyboard shortcuts |
 | `/sandbox` | Sandbox status and config |
 | `/stats` | Usage statistics (with date filtering via `r` key) |
-| `/context` | Token count display |
+| `/context` | Context optimization suggestions (identifies bloat, heavy tools) |
 | `/plan` | Enter plan mode |
 | `/rename` | Rename current session (auto-generates name from context if no argument) |
 | `/tag` | Tag current session |
@@ -1228,6 +1359,13 @@ claude remote-control
 | `/init` | Bootstrap CLAUDE.md for codebase |
 | `/plugin` | Plugin management |
 | `/login` | Sign in through claude.ai |
+| `/loop` | Run prompt/command on recurring interval (e.g., `/loop 5m /foo`) |
+| `/copy N` | Copy Nth-latest assistant response (interactive picker) |
+| `/effort` | Set model effort level for next turn |
+| `/color` | Set prompt-bar color |
+| `/simplify` | Review code for reuse, quality, and efficiency |
+| `/batch` | Plan large-scale changes, then execute in parallel |
+| `/claude-api` | Build apps with Claude API / Anthropic SDK |
 
 ### Keyboard Shortcuts
 
@@ -1240,15 +1378,18 @@ claude remote-control
 | **Shift+Tab** | Cycle permission modes |
 | **Ctrl+F** | Kill background agents (two-press confirm) |
 | **Shift+Up/Down** | Navigate agent team teammates |
-| **Tab** | Autocomplete (bash history, files) |
-| `/keybindings` | Customize all shortcuts |
+| **Tab** | Autocomplete (bash history, files, partial commands) |
+| **Ctrl+O** | Expand collapsed MCP tool call details |
+| **Space** (voice mode) | Push-to-talk (rebindable via `voice:pushToTalk`) |
+| `/keybindings` | Customize all shortcuts (chords, context-specific) |
 
 ### Auth Subcommands
 
 ```bash
-claude auth login          # Log in to Claude
-claude auth status         # Check current authentication status
-claude auth logout         # Log out
+claude auth login              # Log in to Claude
+claude auth login --console    # Log in via Anthropic Console
+claude auth status             # Check current authentication status
+claude auth logout             # Log out
 ```
 
 ### CLI Flags
@@ -1268,6 +1409,8 @@ claude auth logout         # Log out
 | `--worktree` (`-w`) | Create isolated worktree |
 | `--chrome` | Launch with Chrome integration |
 | `--sandbox` / `--no-sandbox` | Enable/disable sandboxing |
+| `--bare` | Skip hooks, LSP, plugin sync, skill walks (for scripted `-p` calls) |
+| `--channels` | Enable MCP channel servers (research preview) |
 | `--verbose` | Detailed connection logs |
 
 ---
@@ -1288,13 +1431,15 @@ claude auth logout         # Log out
 | `CLAUDE_CODE_DISABLE_1M_CONTEXT` | Disable 1M context window (`1`) |
 | `CLAUDE_CODE_SIMPLE` | Simplified output mode (`1`) |
 | `CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS` | Git timeout for plugin fetches (ms) |
+| `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | Disable all experimental beta features (`1`) |
+| `CLAUDE_CODE_DISABLE_CRON` | Stop scheduled cron jobs mid-session (`1`) |
 
 ### Model & Output
 
 | Variable | Description |
 |----------|-------------|
 | `CLAUDE_CODE_SUBAGENT_MODEL` | Override subagent model |
-| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | Max output tokens (default 32K, max 64K) |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | Max output tokens (default 64K, max 128K) |
 | `CLAUDE_CODE_EFFORT_LEVEL` | Effort level: `low` / `medium` / `high` |
 | `MAX_THINKING_TOKENS` | Extended thinking token budget |
 | `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | Subagent auto-compaction threshold |
@@ -1416,6 +1561,22 @@ curl -fsSL https://claude.ai/install.sh | sh
 
 | Version | Feature |
 |---------|---------|
+| v2.1.81 | **`--bare` flag**, MCP OAuth CIMD (SEP-991), `--channels` permission relay |
+| v2.1.80 | **`rate_limits` statusline**, `source: 'settings'` inline plugins, `effort` frontmatter for skills |
+| v2.1.79 | **`--console` auth**, `/remote-control` in VSCode, AI-generated session titles |
+| v2.1.78 | **`StopFailure` hook**, `${CLAUDE_PLUGIN_DATA}` persistent state, terminal notifications (tmux) |
+| v2.1.77 | Opus 4.6 output limits (64K default / 128K max), **`allowRead` sandbox**, `/copy N` syntax |
+| v2.1.76 | **MCP elicitation**, `worktree.sparsePaths` for monorepos, **`PostCompact` hook** |
+| v2.1.75 | **1M context for Opus 4.6**, `/color` command, session naming on prompt bar |
+| v2.1.74 | **`/context` optimization suggestions**, `autoMemoryDirectory` setting, memory leak fixes |
+| v2.1.73 | **`modelOverrides`** setting, actionable OAuth/SSL error guidance |
+| v2.1.72 | **MCP Tool Search activation**, `w` key in `/copy` (write to file), `ExitWorktree` tool |
+| v2.1.71 | **`/loop` scheduling** (cron), cron management tools, voice STT expanded to 20 languages |
+| v2.1.70 | Bedrock/Vertex effort fixes, bridge session reconnection improvements |
+| v2.1.69 | **`/claude-api` skill**, 10 new voice languages (Russian, Polish, Turkish, etc.), 100+ bug fixes |
+| v2.1.68 | Opus 4.6 medium effort default, "ultrathink" keyword for `/effort` |
+| v2.1.63 | **`/simplify`** and **`/batch`** skills, **HTTP hooks** |
+| v2.1.59 | **Auto-memory system**, `/copy` command |
 | v2.1.56 | VS Code extension fix |
 | v2.1.53 | UI fixes, Windows stability improvements |
 | v2.1.51 | **`claude remote-control`**, managed settings via macOS plist / Windows Registry, npm plugin registries |
