@@ -1265,6 +1265,108 @@ AGPL-3.0 (free for open-source). Commercial licensing available for closed-sourc
 
 ---
 
+## Notable Plugins
+
+Third-party and official plugins that extend Claude Code with specialized workflows.
+
+### Frontend Design Plugin
+
+| Field | Value |
+|-------|-------|
+| **Source** | `claude-plugins-official` |
+| **Skill** | `/frontend-design` |
+| **Trigger** | Automatic when building web interfaces |
+| **Reference** | [Frontend Aesthetics Cookbook](https://github.com/anthropics/claude-cookbooks/blob/main/coding/prompting_for_frontend_aesthetics.ipynb) |
+
+Creates distinctive, production-grade UI/UX interfaces with high design quality. Design principles:
+
+- **Bold aesthetic choices** — context-specific character, not generic templates
+- **Distinctive typography** — creative font pairing and hierarchy
+- **High-impact animations** — purposeful motion and spatial composition
+- **Anti-generic** — actively avoids the "AI-generated" look
+
+The skill triggers automatically when the user asks to build web components, pages, or applications. No manual invocation needed.
+
+### Ralph Loop Plugin
+
+| Field | Value |
+|-------|-------|
+| **Source** | `claude-plugins-official` |
+| **Mechanism** | Stop hook that blocks exit and re-feeds the prompt |
+
+Implements iterative AI development loops (the "Ralph Wiggum technique") — a self-referential feedback loop that works **inside the current session** without any external tooling.
+
+#### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/ralph-loop "<prompt>" [options]` | Start iterative loop |
+| `/cancel-ralph` | Cancel active loop |
+| `/ralph-loop:help` | Show help |
+
+#### Options
+
+| Option | Description |
+|--------|-------------|
+| `--max-iterations <n>` | Stop after N iterations (safety escape hatch) |
+| `--completion-promise "<text>"` | Signal completion with exact phrase match |
+
+#### Best Practices
+
+- **Always set `--max-iterations`** as an escape hatch to avoid infinite loops
+- Best for well-defined tasks with automatic verification (tests, linters, builds)
+- Requires clear completion criteria — the loop needs to know when it's done
+- Real-world results: 6 repositories built in hackathons, a $50k contract completed for $297 in API costs
+
+### Codex Plugin (Review Only)
+
+| Field | Value |
+|-------|-------|
+| **Source** | `openai-codex` |
+| **Version** | 1.0.1 |
+| **Purpose** | Code review only |
+
+OpenAI Codex integration used exclusively for automated code review.
+
+#### Primary Command
+
+```bash
+/codex:review [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]
+```
+
+#### Review Output
+
+| Field | Description |
+|-------|-------------|
+| `verdict` | `approve` or `needs-attention` |
+| `summary` | High-level review summary |
+| `findings[]` | Array of issues with severity (`critical`, `high`, `medium`, `low`) |
+| `next_steps` | Suggested follow-up actions |
+
+#### Auto-Review Gate
+
+The plugin includes a **Stop hook** (900s timeout) that automatically triggers a Codex review when Claude finishes a turn. This acts as an automated quality gate.
+
+```bash
+# Toggle the auto-review gate
+/codex:setup --enable-review-gate
+/codex:setup --disable-review-gate
+```
+
+**Hook lifecycle:**
+- `SessionStart` / `SessionEnd` — manage review gate lifecycle (5s timeout each)
+- `Stop` — triggers automatic review (900s timeout)
+
+#### Management Commands
+
+| Command | Description |
+|---------|-------------|
+| `/codex:setup` | Check CLI readiness, toggle review gate |
+| `/codex:status` | Show active/recent review jobs |
+| `/codex:cancel` | Cancel active background review |
+
+---
+
 ## Voice Mode
 
 Speak to Claude Code instead of typing. Push-to-talk activated with the Space key.
@@ -1366,6 +1468,16 @@ claude remote-control
 | `/simplify` | Review code for reuse, quality, and efficiency |
 | `/batch` | Plan large-scale changes, then execute in parallel |
 | `/claude-api` | Build apps with Claude API / Anthropic SDK |
+
+### Batch Command (`/batch`)
+
+Plans changes across multiple files, then spawns parallel agents to execute them simultaneously. Useful for:
+
+- **Large-scale refactors** — rename patterns, update imports across the codebase
+- **Migrations** — apply consistent schema or API changes to many files
+- **Pattern enforcement** — update coding patterns or conventions project-wide
+
+Bundled skill (not a plugin). Available since v2.1.63. Claude analyzes the scope of changes, creates a plan, then delegates execution to parallel subagents for speed.
 
 ### Keyboard Shortcuts
 
