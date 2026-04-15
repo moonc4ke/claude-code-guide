@@ -1,6 +1,6 @@
 # Claude Code: Complete Guide
 
-A practical reference for Claude Code customizations, configuration, and features (current as of v2.1.81).
+A practical reference for Claude Code customizations, configuration, and features (current as of v2.1.109).
 
 ## Quick Reference
 
@@ -156,6 +156,7 @@ Always use the project's design tokens from `src/styles/tokens.css`.
 ### Features
 
 - **Glob patterns** in `paths` field with brace expansion (e.g., `src/{components,pages}/**`)
+- **YAML list of globs** — `paths:` accepts either a single string or a list of globs (same applies to skills frontmatter)
 - **Subdirectory organization** — rules can be nested in subdirectories
 - **Symlink support** — symlinked rule files are followed
 - Rules without `paths` frontmatter apply globally
@@ -319,6 +320,7 @@ Agents can also be defined inline via `--agents` CLI flag (JSON), managed with `
 | `memory` | object | Persistent cross-session memory |
 | `background` | boolean | Always run as background task |
 | `isolation` | string | `"worktree"` for isolated git worktree |
+| `initialPrompt` | string | Auto-submit a first turn when the agent starts |
 
 ### Agent Memory
 
@@ -501,20 +503,24 @@ Hooks are user-defined automations that run at specific lifecycle points. They c
 | `PostToolUse` | After tool execution | Output validation, logging |
 | `PostToolUseFailure` | Tool execution fails | Error handling, retry logic |
 | `PermissionRequest` | Permission prompt shown | Auto-approve/deny patterns |
+| `PermissionDenied` | Auto-mode classifier denies a tool | Return `{retry: true}` to tell model to retry |
 | `Notification` | Notification emitted | Alerts, integrations |
 | `SubagentStart` | Subagent spawns | Resource tracking |
 | `SubagentStop` | Subagent finishes | Result validation |
 | `Stop` | Claude stops generating | Quality checks |
 | `StopFailure` | Turn ends due to API error | Error handling, alerts |
 | `TeammateIdle` | Agent team member idle | Task reassignment |
+| `TaskCreated` | Task created via `TaskCreate` | Task validation, notifications |
 | `TaskCompleted` | Task marked complete | Quality gates |
-| `PreCompact` | Before context compaction | Save important context |
+| `PreCompact` | Before context compaction (can block with exit code 2 or `decision: block`) | Save context, veto compaction |
 | `PostCompact` | After compaction completes | Post-compaction actions |
 | `Setup` | `--init`/`--maintenance` run | Project bootstrapping |
 | `ConfigChange` | Config file changes during session | React to settings updates |
+| `CwdChanged` | Working directory changes | Reactive env management (direnv) |
+| `FileChanged` | File system changes observed | Reactive env management |
 | `Elicitation` | MCP elicitation request received | Intercept/modify elicitation |
 | `ElicitationResult` | MCP elicitation response | Override elicitation responses |
-| `WorktreeCreate` | Worktree created (`--worktree` or `isolation: "worktree"`) | Custom VCS setup |
+| `WorktreeCreate` | Worktree created (`--worktree` or `isolation: "worktree"`) | Custom VCS setup (HTTP hooks can return `worktreePath`) |
 | `WorktreeRemove` | Worktree cleanup | Custom VCS teardown |
 
 ### Hook Types
@@ -590,13 +596,16 @@ Hooks can be defined in multiple locations:
 
 ### Hook Capabilities
 
-- **`permissionDecision`** - Return `allow`, `deny`, or `ask` from PreToolUse hooks
-- **`updatedInput`** - Modify tool input before execution
+- **`permissionDecision`** - Return `allow`, `deny`, `ask`, or `defer` from PreToolUse hooks (`defer` pauses headless sessions for `-p --resume` re-evaluation)
+- **`updatedInput`** - Modify tool input before execution (PreToolUse hooks can pair with `allow` to satisfy `AskUserQuestion` headlessly)
 - **`additionalContext`** - Inject context into the conversation
+- **`sessionTitle`** - Set session title from `UserPromptSubmit` hooks via `hookSpecificOutput.sessionTitle`
 - **`async: true`** - Run hooks in the background
 - **Matchers** - Regex patterns (e.g., `Bash`, `Edit|Write`, `mcp__memory__.*`)
+- **`if`** - Conditional hook execution using permission rule syntax (e.g., `Bash(git *)`) to reduce process spawning
 - **`once`** - Run hook only once per session (useful for skills)
 - **`statusMessage`** - Custom spinner message while hook runs
+- **Hook output > 50K chars** is saved to disk with a file path + preview rather than injected directly into context
 - **`deny`** - Remove tools before sending to model (e.g., `deny: ["mcp__servername"]`)
 
 > **Deprecation:** Top-level `decision`/`reason` fields in PreToolUse hooks are deprecated. Use `hookSpecificOutput.permissionDecision` instead.
@@ -621,7 +630,8 @@ Plugins are distributable packages containing skills, agents, hooks, MCP servers
 ```
 my-plugin/
 ├── .claude-plugin/
-│   └── plugin.json          # Plugin manifest
+│   └── plugin.json          # Plugin manifest (supports top-level `monitors`)
+├── bin/                      # Executables invokable as bare Bash commands
 ├── commands/                 # Slash commands
 ├── agents/                   # Agent definitions
 ├── skills/                   # Skills (namespaced as /plugin:skill)
@@ -682,6 +692,18 @@ Plugins can store persistent data that survives updates using the `${CLAUDE_PLUG
 
 Plugins can ship default configuration via `settings.json` in the plugin root.
 
+### Plugin User Config
+
+Plugins can prompt for configuration at enable time via `manifest.userConfig`. Values marked `sensitive: true` are stored in the macOS keychain or a protected credentials file on other platforms.
+
+### Plugin Monitors
+
+Plugins can declare background monitors via a top-level `monitors` manifest key. Monitors auto-arm at session start or when a skill is invoked.
+
+### Plugin Skills Naming
+
+Plugin skills declared via `"skills": ["./"]` use the skill's frontmatter `name` field for invocation (not the directory basename), so the invocation name is stable across install methods.
+
 ### LSP Servers
 
 Plugins can include LSP (Language Server Protocol) servers via `.lsp.json` for language intelligence features.
@@ -741,6 +763,8 @@ agent: Explore  # Skill runs via Explore subagent
 - **Token metrics** - Token count, tool uses, and duration reported in results
 - **MCP access** - Subagents can access MCP tools
 - **Auto-compaction** - `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` for long-running agents
+- **`Monitor` tool** - Stream events from background scripts (use `Read` on the output file; `TaskOutput` is deprecated)
+- **`/agents` tabbed UI** - `Running` tab shows live subagents with `● N running` indicator, `Library` tab adds Run/View actions
 
 ---
 
@@ -817,6 +841,16 @@ Built-in task tracking with dependency management, shared across agents and sess
 
 ---
 
+## Session Recap
+
+Provides context when returning to a session after time away (added v2.1.108). Configure in `/config` or invoke manually with `/recap`.
+
+- Force availability even when telemetry is disabled: `CLAUDE_CODE_ENABLE_AWAY_SUMMARY=1`
+- Idle-return prompt nudges `/clear` after 75+ minutes of idleness to avoid unnecessary token re-caching
+- Pro users see a footer hint with rough token count for the next uncached turn after cache expiry
+
+---
+
 ## Checkpointing & Rewind
 
 Claude Code automatically tracks file state at every user prompt, allowing you to restore previous states.
@@ -872,7 +906,7 @@ Faster output from the same Opus 4.6 model at higher token cost.
 
 | Scope | Location | Purpose |
 |-------|----------|---------|
-| Managed | `/etc/claude-code/` (Linux), `/Library/Application Support/ClaudeCode/` (macOS), `C:\Program Files\ClaudeCode\` (Windows) | Organization policy (also supports macOS plist and Windows Registry) |
+| Managed | `/etc/claude-code/` (Linux), `/Library/Application Support/ClaudeCode/` (macOS), `C:\Program Files\ClaudeCode\` (Windows) | Organization policy (also supports macOS plist, Windows Registry, and a `managed-settings.d/` drop-in directory merged alphabetically) |
 | CLI args | Command line flags | Session override |
 | Local | `.claude/settings.local.json` | Personal project settings (gitignored) |
 | Project | `.claude/settings.json` | Shared team settings |
@@ -908,6 +942,13 @@ Faster output from the same Opus 4.6 model at higher token cost.
 | `voiceEnabled` | boolean | Enable voice mode on startup |
 | `feedbackSurveyRate` | number | Enterprise feedback survey sample rate |
 | `channels` | boolean | Enable MCP channel servers (research preview) |
+| `allowedChannelPlugins` | string[] | Team/enterprise allowlist for channel plugins |
+| `disableSkillShellExecution` | boolean | Disable inline shell execution in skills, custom slash commands, and plugin commands |
+| `disableDeepLinkRegistration` | boolean | Prevent `claude-cli://` protocol handler registration |
+| `showThinkingSummaries` | boolean | Restore thinking summaries in interactive sessions (default off) |
+| `forceRemoteSettingsRefresh` | boolean | Block startup until managed settings are freshly fetched; fail-closed on fetch failure |
+| `refreshInterval` | number | Re-run the status line command every N seconds |
+| `recap` | object | Configure session recap shown when returning to a session |
 
 ### Managing Settings
 
@@ -1003,6 +1044,7 @@ OS-level sandboxing for bash commands to restrict file and network access.
 
 - **`allowRead`** - Re-allow read access within `denyRead` regions (fine-grained control)
 - **`enableWeakerNetworkIsolation`** - macOS only, for TLS certificate verification scenarios
+- **`failIfUnavailable`** - Exit with an error when sandbox is enabled but can't start (fail-closed), instead of running unsandboxed
 
 ```json
 // Example: deny all of /secrets but allow /secrets/public
@@ -1019,6 +1061,17 @@ OS-level sandboxing for bash commands to restrict file and network access.
 ```bash
 /sandbox         # View sandbox status and dependency info
 ```
+
+---
+
+## PowerShell Tool (Windows, Preview)
+
+Opt-in preview of a native PowerShell tool for Windows (added v2.1.84). Reference: https://code.claude.com/docs/en/tools-reference#powershell-tool
+
+- Hardened permission checks (trailing `&` background job bypass, `-ErrorAction Break` debugger hang, archive TOCTOU, parse-fail fallback)
+- `/env` also applies to PowerShell tool commands (previously Bash only)
+- Version-appropriate prompt guidance (PS 5.1 vs 7+)
+- External-command args containing both a double-quote and whitespace now prompt instead of auto-allowing
 
 ---
 
@@ -1137,6 +1190,12 @@ Use `${VAR}` or `${VAR:-default}` in `.mcp.json`:
 | `deniedMcpServers` | Denylist of MCP servers |
 | `enableAllProjectMcpServers` | Auto-enable all project MCP servers |
 
+### MCP Tool Result Size Override
+
+MCP servers can override tool result persistence via the `_meta["anthropic/maxResultSizeChars"]` annotation (up to 500K) to pass through larger payloads like DB schemas without truncation.
+
+**Note:** MCP tool descriptions and server instructions are capped at 2KB; OpenAPI-generated servers won't bloat context.
+
 ### MCP Environment Variables
 
 | Variable | Description |
@@ -1185,8 +1244,10 @@ Many servers require OAuth. Use `/mcp` in Claude Code to authenticate:
 ```
 
 - Supports Client ID Metadata Document (CIMD / SEP-991)
+- RFC 9728 Protected Resource Metadata discovery to find the authorization server
 - Pre-configured OAuth credentials for servers without Dynamic Client Registration
 - Manual URL paste fallback when automatic redirect fails
+- Step-up authorization: `403 insufficient_scope` responses trigger re-authorization when a refresh token exists
 
 ---
 
@@ -1489,14 +1550,13 @@ claude remote-control
 | `/tasks` or **Ctrl+T** | Task list management |
 | `/fast` | Toggle fast mode |
 | `/compact` | Manually compact context |
-| `/rewind` | Checkpoint selector (also Esc+Esc) |
+| `/rewind` or `/undo` | Checkpoint selector (also Esc+Esc) |
 | `/keybindings` | Customize keyboard shortcuts |
 | `/sandbox` | Sandbox status and config |
 | `/stats` | Usage statistics (with date filtering via `r` key) |
 | `/context` | Context optimization suggestions (identifies bloat, heavy tools) |
 | `/plan` | Enter plan mode |
 | `/rename` | Rename current session (auto-generates name from context if no argument) |
-| `/tag` | Tag current session |
 | `/teleport` | Connect to claude.ai |
 | `/remote-env` | Remote environment config |
 | `/remote-control` or `/rc` | Remote Control session |
@@ -1508,13 +1568,22 @@ claude remote-control
 | `/init` | Bootstrap CLAUDE.md for codebase |
 | `/plugin` | Plugin management |
 | `/login` | Sign in through claude.ai |
-| `/loop` | Run prompt/command on recurring interval (e.g., `/loop 5m /foo`) |
+| `/loop` or `/proactive` | Run prompt/command on recurring interval (e.g., `/loop 5m /foo`) |
 | `/copy N` | Copy Nth-latest assistant response (interactive picker) |
 | `/effort` | Set model effort level for next turn |
 | `/color` | Set prompt-bar color |
 | `/simplify` | Review code for reuse, quality, and efficiency |
 | `/batch` | Plan large-scale changes, then execute in parallel |
 | `/claude-api` | Build apps with Claude API / Anthropic SDK |
+| `/recap` | Context recap when returning to a stale session |
+| `/powerup` | Interactive lessons teaching Claude Code features |
+| `/team-onboarding` | Generate teammate ramp-up guide from your local usage |
+| `/release-notes` | Interactive version picker showing release notes |
+| `/cost` | Per-model and cache-hit cost breakdown (subscription users) |
+| `/model` | Switch model (warns before mid-conversation switches) |
+| `/usage` | Plan usage summary |
+
+**Removed:** `/tag` (removed in v2.1.92); `/vim` (toggle vim mode via `/config` → Editor mode).
 
 ### Batch Command (`/batch`)
 
@@ -1532,15 +1601,19 @@ Bundled skill (not a plugin). Available since v2.1.63. Claude analyzes the scope
 |----------|--------|
 | **Ctrl+T** | Toggle task list |
 | **Ctrl+B** | Background running task/agent |
-| **Ctrl+G** | Open external editor |
+| **Ctrl+G** or **Ctrl+X Ctrl+E** | Open external editor |
 | **Esc+Esc** | Open rewind/checkpoint selector |
 | **Shift+Tab** | Cycle permission modes |
-| **Ctrl+F** | Kill background agents (two-press confirm) |
+| **Ctrl+X Ctrl+K** | Kill background agents (two-press confirm; was `Ctrl+F` before v2.1.83) |
+| **Ctrl+A** (in `/resume`) | Show sessions from all projects (default: current directory only) |
 | **Shift+Up/Down** | Navigate agent team teammates |
 | **Tab** | Autocomplete (bash history, files, partial commands) |
-| **Ctrl+O** | Expand collapsed MCP tool call details |
+| **Ctrl+O** | Transcript / focus view toggle — expands MCP tool details; in transcript mode press `/` to search, `n`/`N` to step through matches |
+| **Ctrl+L** | Clear screen and force full redraw |
 | **Space** (voice mode) | Push-to-talk (rebindable via `voice:pushToTalk`) |
 | `/keybindings` | Customize all shortcuts (chords, context-specific) |
+
+**Note:** `chat:killAgents` and `chat:fastMode` are rebindable via `~/.claude/keybindings.json`.
 
 ### Auth Subcommands
 
@@ -1592,6 +1665,13 @@ claude auth logout             # Log out
 | `CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS` | Git timeout for plugin fetches (ms) |
 | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | Disable all experimental beta features (`1`) |
 | `CLAUDE_CODE_DISABLE_CRON` | Stop scheduled cron jobs mid-session (`1`) |
+| `CLAUDE_CODE_NO_FLICKER` | Flicker-free alt-screen rendering with virtualized scrollback (`1`) |
+| `CLAUDE_CODE_PERFORCE_MODE` | Edit/Write/NotebookEdit fail on read-only files with a `p4 edit` hint |
+| `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` | Strip Anthropic + cloud provider credentials from subprocess env (Bash, hooks, MCP stdio) |
+| `CLAUDE_CODE_SCRIPT_CAPS` | Limit per-session script invocations |
+| `CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE` | Keep marketplace cache when `git pull` fails (offline environments) |
+| `CLAUDE_CODE_ENABLE_AWAY_SUMMARY` | Force `/recap` when telemetry is disabled |
+| `CLAUDE_CODE_CERT_STORE` | `bundled` to use only bundled CAs (default: OS CA store trusted) |
 
 ### Model & Output
 
@@ -1616,6 +1696,8 @@ claude auth logout             # Log out
 | `CLAUDE_CODE_SHELL_PREFIX` | Command prefix for all bash |
 | `BASH_MAX_TIMEOUT_MS` | Maximum bash command timeout |
 | `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` | Keep bash CWD at project root |
+| `CLAUDE_STREAM_IDLE_TIMEOUT_MS` | Streaming idle watchdog threshold (default 90s) |
+| `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK` | Disable non-streaming fallback when streaming fails |
 
 ### MCP & Network
 
@@ -1627,6 +1709,11 @@ claude auth logout             # Log out
 | `MCP_TOOL_TIMEOUT` | MCP tool execution timeout |
 | `MCP_CLIENT_SECRET` | MCP OAuth client secret |
 | `MCP_OAUTH_CALLBACK_PORT` | MCP OAuth callback port |
+| `MCP_CONNECTION_NONBLOCKING` | `-p` mode skips MCP connection wait entirely (`true`) |
+| `CLAUDE_CODE_MCP_SERVER_NAME` | Passed to MCP `headersHelper` scripts (lets one helper serve multiple servers) |
+| `CLAUDE_CODE_MCP_SERVER_URL` | Passed to MCP `headersHelper` scripts |
+| `ENABLE_PROMPT_CACHING_1H` | Opt into 1-hour prompt cache TTL (API key, Bedrock, Vertex, Foundry) |
+| `FORCE_PROMPT_CACHING_5M` | Force 5-minute TTL (overrides the 1h opt-in) |
 | `CLAUDE_CODE_CLIENT_CERT` | mTLS client certificate |
 | `CLAUDE_CODE_CLIENT_CERT_KEY` | mTLS client key |
 | `CLAUDE_CODE_CLIENT_CERT_KEY_PASSPHRASE` | mTLS key passphrase |
@@ -1646,6 +1733,10 @@ claude auth logout             # Log out
 | `CLAUDE_CODE_USE_BEDROCK` | Use AWS Bedrock (`1`) |
 | `CLAUDE_CODE_USE_VERTEX` | Use Google Vertex AI (`1`) |
 | `CLAUDE_CODE_USE_FOUNDRY` | Use Azure Foundry (`1`) |
+| `CLAUDE_CODE_USE_MANTLE` | Use Amazon Bedrock powered by Mantle (`1`) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL_SUPPORTS` | Override effort/thinking capability detection for pinned default models (3p providers) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL_NAME` | Customize the `/model` picker label |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL_DESCRIPTION` | Customize the `/model` picker description |
 
 ### Teams & Agents
 
@@ -1720,6 +1811,22 @@ curl -fsSL https://claude.ai/install.sh | sh
 
 | Version | Feature |
 |---------|---------|
+| v2.1.109 | Extended-thinking indicator with rotating progress hint |
+| v2.1.108 | **`ENABLE_PROMPT_CACHING_1H` / `FORCE_PROMPT_CACHING_5M`** env vars, **`/recap`** session recap, built-in slash commands invocable via Skill tool, `/undo` alias for `/rewind`, `/model` warns before mid-conversation switches, `/resume` defaults to current directory (Ctrl+A for all projects) |
+| v2.1.107 | Earlier thinking hints during long operations |
+| v2.1.105 | `path` param for **`EnterWorktree`**, **PreCompact hook can block compaction**, plugin top-level **`monitors`** manifest, `/proactive` alias for `/loop`, skill description cap raised to 1,536 chars, `/doctor` status icons |
+| v2.1.101 | **`/team-onboarding`** command, OS CA cert store trust by default (`CLAUDE_CODE_CERT_STORE=bundled`), tool-not-available reasons, rate-limit retry details |
+| v2.1.98 | Interactive **Vertex AI setup wizard**, **`Monitor` tool** for background scripts, `CLAUDE_CODE_PERFORCE_MODE`, subprocess sandboxing + PID namespace (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`), `--exclude-dynamic-system-prompt-sections`, tabbed `/agents` with Running tab |
+| v2.1.97 | **Focus view toggle (`Ctrl+O`)** in `NO_FLICKER`, `refreshInterval` status line, `workspace.git_worktree` in status line JSON, `● N running` indicator in `/agents`, Cedar policy syntax highlighting |
+| v2.1.94 | **Amazon Bedrock via Mantle** (`CLAUDE_CODE_USE_MANTLE`), **default effort raised to high** for API-key/Bedrock/Vertex/Foundry/Team/Enterprise, `hookSpecificOutput.sessionTitle` for `UserPromptSubmit`, `keep-coding-instructions` frontmatter for plugin output styles |
+| v2.1.92 | **`forceRemoteSettingsRefresh`** managed setting, interactive **Bedrock setup wizard**, per-model/cache-hit breakdown in `/cost`, `/release-notes` interactive picker, **`/tag` and `/vim` removed** |
+| v2.1.91 | MCP result persistence override (`_meta["anthropic/maxResultSizeChars"]`, up to 500K), **`disableSkillShellExecution`** setting, multi-line `claude-cli://` prompts, plugin `bin/` executables |
+| v2.1.90 | **`/powerup`** interactive lessons, `CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE`, `.husky` added to protected directories |
+| v2.1.89 | **`"defer"` PreToolUse decision**, **`CLAUDE_CODE_NO_FLICKER`** virtualized rendering, **`PermissionDenied` hook**, named subagents in `@` typeahead, `MCP_CONNECTION_NONBLOCKING`, documented **`TaskCreated` hook**, `showThinkingSummaries` setting (default off) |
+| v2.1.86 | `X-Claude-Code-Session-Id` header for API requests, `.jj`/`.sl` VCS exclusions |
+| v2.1.85 | **Conditional `if` field for hooks** (permission-rule syntax), MCP OAuth RFC 9728 Protected Resource Metadata, `CLAUDE_CODE_MCP_SERVER_NAME/_URL` env vars, scheduled task timestamp markers, PreToolUse can satisfy `AskUserQuestion` with `updatedInput` |
+| v2.1.84 | **PowerShell tool** (Windows preview), `CLAUDE_STREAM_IDLE_TIMEOUT_MS`, **`TaskCreated` hook**, `WorktreeCreate` supports `type: "http"`, `allowedChannelPlugins`, rules/skills `paths:` accepts YAML list, MCP tool description 2KB cap |
+| v2.1.83 | **`managed-settings.d/` drop-in directory**, **`CwdChanged`/`FileChanged` hooks**, `sandbox.failIfUnavailable`, `disableDeepLinkRegistration`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, **transcript search** (`/`, `n`/`N` in Ctrl+O), `Ctrl+X Ctrl+E` external editor, `[Image #N]` paste chips, agent `initialPrompt` frontmatter, kill-agents keybinding moved from `Ctrl+F` to `Ctrl+X Ctrl+K`, `TaskOutput` deprecated in favor of `Read`, plugin `userConfig` with keychain storage |
 | v2.1.81 | **`--bare` flag**, MCP OAuth CIMD (SEP-991), `--channels` permission relay |
 | v2.1.80 | **`rate_limits` statusline**, `source: 'settings'` inline plugins, `effort` frontmatter for skills |
 | v2.1.79 | **`--console` auth**, `/remote-control` in VSCode, AI-generated session titles |
