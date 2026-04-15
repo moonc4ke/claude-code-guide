@@ -1365,6 +1365,53 @@ The plugin includes a **Stop hook** (900s timeout) that automatically triggers a
 | `/codex:status` | Show active/recent review jobs |
 | `/codex:cancel` | Cancel active background review |
 
+### LLM Council Skill
+
+| Field | Value |
+|-------|-------|
+| **Source** | Custom skill (project-level) |
+| **Skill** | `/llm-council` |
+| **Trigger** | Automatic on decision/tradeoff questions, or manual via trigger phrases |
+| **Based on** | [Karpathy's LLM Council methodology](https://x.com/karpathy) |
+
+Runs any question, idea, or decision through a council of 5 AI advisors who independently analyze it, peer-review each other anonymously, and synthesize a final verdict.
+
+#### Trigger Phrases
+
+| Type | Phrases |
+|------|---------|
+| **Mandatory** | "council this", "run the council", "war room this", "pressure-test this", "stress-test this", "debate this" |
+| **Strong** (with real tradeoff) | "should I X or Y", "which option", "what would you do", "is this the right move", "validate this", "I can't decide", "I'm torn between" |
+
+#### The Five Advisors
+
+| Advisor | Thinking Style | Tension Partner |
+|---------|---------------|-----------------|
+| **The Contrarian** | Finds flaws, missing pieces, failure modes | vs Expansionist |
+| **The First Principles Thinker** | Strips assumptions, rebuilds from ground up | vs Executor |
+| **The Expansionist** | Finds hidden upside, adjacent opportunities | vs Contrarian |
+| **The Outsider** | Zero context, fresh eyes, catches curse of knowledge | Center/neutral |
+| **The Executor** | Fastest path to implementation, "what do you do Monday?" | vs First Principles |
+
+#### Session Flow
+
+1. **Frame** — Scan workspace for context (CLAUDE.md, memory, relevant files), reframe as neutral prompt
+2. **Convene** — 5 sub-agents in parallel, each fully leaning into their angle (150-300 words each)
+3. **Peer Review** — Anonymize responses (A-E), 5 reviewers evaluate: strongest? biggest blind spot? what did ALL miss?
+4. **Chairman Synthesis** — Final verdict: agreements, clashes, blind spots caught, recommendation, one first step
+5. **Report** — HTML visual report (`council-report-[timestamp].html`) + full transcript (`council-transcript-[timestamp].md`)
+
+#### Output
+
+| File | Purpose |
+|------|---------|
+| `council-report-[timestamp].html` | Visual report — verdict, advisor alignment visual, collapsible details |
+| `council-transcript-[timestamp].md` | Full transcript — all responses, peer reviews, synthesis |
+
+#### Installation
+
+Place in `.claude/skills/llm-council/SKILL.md` at the project level. The skill uses the `Agent` tool to spawn advisors in parallel.
+
 ---
 
 ## Voice Mode
